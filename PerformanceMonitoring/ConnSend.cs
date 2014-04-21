@@ -40,20 +40,15 @@ namespace PerformanceMonitoring
         private NetworkStream netStream;
         private BinaryWriter writer;
         private BinaryReader reader;
+        private string _ipClient;
 
-
-
-        /// <summary>
-        ///  Możliwość wybrania portu oraz w jakim trybie klasa ma pracować.
-        /// </summary>
-        ///  <param name="port">Odpowiada za podanie portu z którego chcemy korzystać podczas komuniakcji</param>
-        ///  <param name="connectionMode">Tryb w którym uruchomić klasę. Listening podpowiada za nasłuchiwanie, Connection za tryb połączenia.</param>
         public ConnSend(int port, ConnectionMode connectionMode)
         {
             this.port = port;
             autoResume = false;
             _connected = false;
             _connectionMode = connectionMode;
+            _ipClient = "";
 
             BWListening.WorkerReportsProgress = true;
             BWListening.WorkerSupportsCancellation = true;
@@ -70,14 +65,13 @@ namespace PerformanceMonitoring
             BWConnecting.DoWork += BWConnecting_DoWork;
         }
 
-
-
         public ConnSend(int port, bool autoResume, ConnectionMode connectionMode)
         {
             this.port = port;
             this.autoResume = autoResume;
             _connected = false;
             _connectionMode = connectionMode;
+            _ipClient = "";
 
             BWListening.WorkerReportsProgress = true;
             BWListening.WorkerSupportsCancellation = true;
@@ -107,6 +101,18 @@ namespace PerformanceMonitoring
             get
             {
                 return _communique;
+            }
+            set
+            {
+                _communique = value;
+            }
+        }
+
+        public string IPClient
+        {
+            get
+            {
+                return _ipClient;
             }
         }
 
@@ -155,7 +161,7 @@ namespace PerformanceMonitoring
 
         private void BWListening_DoWork(object sender, DoWorkEventArgs e)
         {
-            Listener = new TcpListener(port);
+            Listener = new TcpListener(IPAddress.Any, port);
             Listener.Start();
 
             while (!Listener.Pending())
@@ -168,23 +174,33 @@ namespace PerformanceMonitoring
                 }
             }
 
-            Client = Listener.AcceptTcpClient(); // Przypisanie klienta który połączył się z naszym listenerem
-            netStream = Client.GetStream(); // Stworzenie połączenia przez który wysyłamy i odbieramy dane
-            writer = new BinaryWriter(netStream); // Obiekt do wysyłania danych
-            reader = new BinaryReader(netStream); // Obiekt do odbierania danych
+            try
+            {
+                Client = Listener.AcceptTcpClient(); // Przypisanie klienta który połączył się z naszym listenerem
+                netStream = Client.GetStream(); // Stworzenie połączenia przez który wysyłamy i odbieramy dane
+                writer = new BinaryWriter(netStream); // Obiekt do wysyłania danych
+                reader = new BinaryReader(netStream); // Obiekt do odbierania danych
 
-            if (reader.ReadString() == Messages.Connect) // Sprawdzamy czy otrzymaliśmy komunikat o chęci połączenia się
-            {
-                Send(Messages.OK); // Wysyłamy komunikat że zgadzamy się na połączenie
-                _connected = true;
-                BWReceiving.RunWorkerAsync();
+                if (reader.ReadString() == Messages.Connect) // Sprawdzamy czy otrzymaliśmy komunikat o chęci połączenia się
+                {
+                    Send(Messages.OK); // Wysyłamy komunikat że zgadzamy się na połączenie
+                    _connected = true;
+                    // Wyciągamy IP klienta z którym się połączyliśmy
+                    IPEndPoint IPep = (IPEndPoint)Client.Client.RemoteEndPoint;
+                    _ipClient = IPep.Address.ToString();
+                    BWReceiving.RunWorkerAsync();
+                }
+                else // występuje gdy nie został do nas wysłany komunikat
+                {
+                    if (Client != null)
+                        Client.Close();
+                    Listener.Stop();
+                    _connected = false;
+                }
             }
-            else // występuje gdy nie został do nas wysłany komunikat
+            catch (Exception ex)
             {
-                if (Client != null)
-                    Client.Close();
-                Listener.Stop();
-                _connected = false;
+
             }
         }
 
@@ -201,6 +217,7 @@ namespace PerformanceMonitoring
                 _communique = communique;
             Client.Close();
             Listener.Stop();
+            _ipClient = "";
         }
 
         private void BWReceiving_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
@@ -213,23 +230,30 @@ namespace PerformanceMonitoring
 
         private void BWConnecting_DoWork(object sender, DoWorkEventArgs e)
         {
-            Client = new TcpClient();
-            Client.Connect(IPAddress.Parse((string)e.Argument), port);
-            netStream = Client.GetStream();
-            writer = new BinaryWriter(netStream);
-            reader = new BinaryReader(netStream);
-            Send(Messages.Connect);
+            try
+            {
+                Client = new TcpClient();
+                Client.Connect(IPAddress.Parse((string)e.Argument), port);
+                netStream = Client.GetStream();
+                writer = new BinaryWriter(netStream);
+                reader = new BinaryReader(netStream);
+                Send(Messages.Connect);
 
-            if (reader.ReadString() == Messages.OK)
-            {
-                _connected = true;
-                BWReceiving.RunWorkerAsync();
+                if (reader.ReadString() == Messages.OK)
+                {
+                    _connected = true;
+                    BWReceiving.RunWorkerAsync();
+                }
+                else
+                {
+                    _connected = false;
+                    if (Client != null)
+                        Client.Close();
+                }
             }
-            else
+            catch(Exception ex)
             {
-                _connected = false;
-                if (Client != null)
-                    Client.Close();
+
             }
         }
 
